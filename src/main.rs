@@ -1,9 +1,15 @@
 use bevy::prelude::*;
 
-mod circle;
+mod game_logic;
 
-use crate::circle::shape::ShapePlugin;
+mod create_objects;
+
+use crate::game_logic::GameLogicPlugin;
+
+use crate::create_objects::CreateObjectsPlugin;
 
 fn main() {
-    App::new().add_plugins((DefaultPlugins, ShapePlugin)).run();
+    App::new()
+        .add_plugins((DefaultPlugins, CreateObjectsPlugin, GameLogicPlugin))
+        .run();
 }

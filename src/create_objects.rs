@@ -46,38 +46,40 @@ fn setup(
     commands.spawn(Camera2dBundle::default());
     let window = window.single();
     let radius = window.height() / 38.0;
-    let ball = Mesh2dHandle(meshes.add(Circle {
-        radius
-    }));
-    commands.spawn((
-        MaterialMesh2dBundle {
-            mesh: ball,
-            material: materials.add(Color::rgb(1.0, 0.0, 0.0)),
-            transform: Transform {
-                rotation: Quat::from_rotation_z(PI / 2.0),
-                translation: Vec3 {
-                    x: 0.0,
-                    // add offset to prevent ball from getting stuck
-                    y: -window.height() / 2.0 + radius * 2.0 + window.height() / 60.0,
-                    z: 0.0,
-                },
-                scale: Vec3 {
-                    x: 1.0,
-                    y: 1.0,
-                    z: 1.0,
-                },
+    let ball_state = BallState {
+        radius,
+        speed: 600.0,
+        direction: Vec3::new(0.0, 1.0, 0.0),
+        active: false,
+    };
+    let ball = Mesh2dHandle(meshes.add(Circle { radius }));
+    commands.spawn((MaterialMesh2dBundle {
+        mesh: ball,
+        material: materials.add(Color::rgb(1.0, 0.0, 0.0)),
+        transform: Transform {
+            rotation: Quat::from_rotation_z(PI / 2.0),
+            translation: Vec3 {
+                x: 0.0,
+                // add offset to prevent ball from getting stuck
+                y: -window.height() / 2.0 + radius * 2.0 + window.height() / 60.0,
+                z: 0.0,
             },
-            ..default()
+            scale: Vec3 {
+                x: 1.0,
+                y: 1.0,
+                z: 1.0,
+            },
         },
-        BallState {
-            radius,
-            speed: 400.0,
-            direction: Vec3::new(0.0, 1.0, 0.0),
-            active: false,
-        },
-    ));
+        ..default()
+    }, ball_state));
     let rectangle =
         Mesh2dHandle(meshes.add(Rectangle::new(window.height() / 40.0, window.width() / 7.0)));
+    let rectangle_state = RectangleState {
+        width: window.width() / 6.0,
+        height: window.height() / 20.0,
+        player_controlled: true,
+        hit_bar: 1,
+    };
     commands.spawn((
         RectangleBundle {
             material_mesh: MaterialMesh2dBundle {
@@ -98,12 +100,7 @@ fn setup(
                 },
                 ..default()
             },
-            rectangle_state: RectangleState {
-                width: window.width() / 6.0,
-                height: window.height() / 20.0,
-                player_controlled: true,
-                hit_bar: 1,
-            },
+            rectangle_state,
         },
         PlayerRectangle,
     ));
@@ -113,10 +110,16 @@ fn setup(
             let rectangle_height = window.height() / 20.;
             let rectangle =
                 Mesh2dHandle(meshes.add(Rectangle::new(rectangle_height, rectangle_width)));
+            let rectangle_state = RectangleState {
+                width: rectangle_width,
+                height: rectangle_height,
+                player_controlled: false,
+                hit_bar: if (j % 2 == 0 && (i == 1 || i == -1)) || (j == 0 && i == 0)  { 3 } else { 1 },
+            };
             commands.spawn(RectangleBundle {
                 material_mesh: MaterialMesh2dBundle {
                     mesh: rectangle,
-                    material: materials.add(Color::rgb(0.0, 1.0, 0.0)),
+                    material: materials.add(Color::rgb(0.0, 1.0 / rectangle_state.hit_bar as f32, 0.0)),
                     transform: Transform {
                         rotation: Quat::from_rotation_z(PI / 2.0),
                         translation: Vec3 {
@@ -133,12 +136,7 @@ fn setup(
                     },
                     ..default()
                 },
-                rectangle_state: RectangleState {
-                    width: rectangle_width,
-                    height: rectangle_height,
-                    player_controlled: false,
-                    hit_bar: if j % 2 == 0 { 3 } else { 1 },
-                },
+                rectangle_state,
             });
         }
     }

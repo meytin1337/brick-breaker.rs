@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
-use crate::create_objects::{BallState, PlayerRectangle, RectangleState};
+use crate::create_objects::{BallState, BrickState, PlayerRectangleState, Floor};
+use bevy_xpbd_2d::prelude::*;
 
 pub struct GameLogicPlugin;
 
@@ -15,79 +16,127 @@ impl Plugin for GameLogicPlugin {
             Update,
             (
                 activate_ball,
+                on_collision_with_brick,
+                on_collision_with_floor,
                 move_inactive_ball,
+                move_rectangle,
                 (
-                    check_if_ball_hits_rectangle,
-                    check_if_ball_hits_window_side,
-                    move_ball,
-                    move_rectangle,
-                ).chain(),
+                    on_collision_with_player_rectangle,
+                    remove_brick
+                ).chain()
             ),
         )
         .insert_resource(GameState { lives: 3 });
     }
 }
 
-fn move_ball(mut ball: Query<(&mut Transform, &BallState)>, timer: Res<Time>) {
-    let (mut transform, ball) = ball.single_mut();
-    if !ball.active {
-        return;
-    }
-    transform.translation += ball.speed * timer.delta_seconds() * ball.direction;
-}
-
 fn activate_ball(
-    mut ball: Query<&mut BallState>,
+    mut ball_query: Query<(&mut BallState, &mut LinearVelocity)>, 
     keyboard_input: Res<ButtonInput<KeyCode>>,
 ) {
-    let mut ball_state = ball.single_mut();
+    let (mut ball_state, mut linear_velocity) = ball_query.single_mut();
     if keyboard_input.just_pressed(KeyCode::Space) {
         ball_state.active = true;
+        linear_velocity.x = 0.0;
+        linear_velocity.y = 1.0 * ball_state.speed;
     }
 }
 
+// read more about event readers
+fn on_collision_with_player_rectangle(
+    mut linear_velocity_query: Query<&mut LinearVelocity, With<BallState>>,
+    ball_query: Query<(&GlobalTransform, &BallState)>,
+    rectangle_query: Query<(&GlobalTransform, &PlayerRectangleState)>,
+    colliding_entities_query: Query<&CollidingEntities, With<PlayerRectangleState>>,
+) {
+    let mut linear_velocity = linear_velocity_query.single_mut();
+
+    if let Ok(colliding_entities) = colliding_entities_query.get_single() {
+        if !(colliding_entities.0.is_empty()) {
+            let (ball_global_transform, ball_state) = ball_query.single();
+            let (rectangle_global_transform, rectangle_state) = rectangle_query.single();
+            let ball_x = ball_global_transform.translation().x;
+            let rectangle_x = rectangle_global_transform.translation().x;
+            let rectangle_width = rectangle_state.width;
+            // value between -1 and 1
+            let x_direction = (ball_x - rectangle_x) / rectangle_width;
+            // normalize y
+            *linear_velocity = LinearVelocity(linear_velocity.normalize());
+            linear_velocity.x = x_direction;
+            // normalize again to get back to original speed
+            *linear_velocity = LinearVelocity(linear_velocity.normalize());
+            linear_velocity.x = linear_velocity.x * ball_state.speed;
+            linear_velocity.y = linear_velocity.y * ball_state.speed;
+        }
+    }
+}
+
+fn on_collision_with_floor(
+    mut floor_query: Query<(&CollidingEntities, &mut Floor)>,
+    mut game_state: ResMut<GameState>,
+    mut ball_query: Query<(&mut LinearVelocity, &mut Transform, &mut BallState)>,
+    player_rectangle_query: Query<&GlobalTransform, With<PlayerRectangleState>>,
+    time: Res<Time>,
+) {
+    if let Ok((colliding_entities, mut floor_state)) = floor_query.get_single_mut() {
+        floor_state.hit_timer.tick(time.delta());
+        // only react to first collision
+        if !(colliding_entities.0.is_empty()) && floor_state.hit_timer.elapsed_secs() > 0.05 {
+            floor_state.hit_timer.reset();
+            game_state.lives -= 1;
+            let (mut linear_velocity, mut transform, mut ball_state) = ball_query.single_mut();
+            let rectangle_global_transform = player_rectangle_query.single().translation();
+            ball_state.active = false;
+            linear_velocity.x = 0.0;
+            linear_velocity.y = 0.0;
+            transform.translation.x = ball_state.initial_position.x + rectangle_global_transform.x;
+            transform.translation.y = ball_state.initial_position.y;
+        }
+    }
+}
 fn move_inactive_ball(
-    mut ball: Query<(&mut Transform, &BallState, &GlobalTransform), With<BallState>>,
+    mut ball_query: Query<(&mut Transform, &GlobalTransform, &BallState)>,
+    player_rectangle_query: Query<&PlayerRectangleState>,
     keyboard_input: Res<ButtonInput<KeyCode>>,
-    rectangle_state: Query<&RectangleState, With<PlayerRectangle>>,
     window: Query<&Window>,
 ) {
-    let (mut transform, ball_state, global_transform) = ball.single_mut();
-    let rectangle_width = rectangle_state.single().width;
+    let (mut transform, global_transform, ball_state) = ball_query.single_mut();
     let window = window.single();
-    if ball_state.active {
-        return;
-    }
-    if keyboard_input.pressed(KeyCode::ArrowLeft) && global_transform.translation().x - rectangle_width / 2.0 >= -window.width() / 2.0 {
-        transform.translation += Vec3 {
-            x: -15.0,
-            y: 0.0,
-            z: 0.0,
-        };
-    } else if keyboard_input.pressed(KeyCode::ArrowRight) && global_transform.translation().x + rectangle_width / 2.0 <= window.width() / 2.0{
-        transform.translation += Vec3 {
-            x: 15.0,
-            y: 0.0,
-            z: 0.0,
-        };
+    let rectangle_width = player_rectangle_query.single().width;
+    if ball_state.active == false {
+        if keyboard_input.pressed(KeyCode::ArrowLeft) && global_transform.translation().x - rectangle_width / 2.0 >= -window.width() / 2.0 {
+            transform.translation += Vec3 {
+                x: -15.0,
+                y: 0.0,
+                z: 0.0,
+            };
+        } else if keyboard_input.pressed(KeyCode::ArrowRight) && global_transform.translation().x + rectangle_width / 2.0 <= window.width() / 2.0{
+            transform.translation += Vec3 {
+                x: 15.0,
+                y: 0.0,
+                z: 0.0,
+            };
+        }
     }
 }
 
 fn move_rectangle(
-    mut rectangle: Query<(&GlobalTransform, &mut Transform, &RectangleState), With<PlayerRectangle>>,
+    mut rectangle: Query<(&GlobalTransform, &mut Transform, &PlayerRectangleState)>,
     keyboard_input: Res<ButtonInput<KeyCode>>,
     window: Query<&Window>,
 ) {
     let (global_transform, mut transform, state) = rectangle.single_mut();
     let window = window.single();
-    if keyboard_input.pressed(KeyCode::ArrowLeft) && global_transform.translation().x - state.width / 2.0 >= -window.width() / 2.0 {
+    if keyboard_input.pressed(KeyCode::ArrowLeft)
+        && global_transform.translation().x - state.width / 2.0 >= -window.width() / 2.0
+    {
         transform.translation += Vec3 {
             x: -15.0,
             y: 0.0,
             z: 0.0,
-        };
-
-    } else if keyboard_input.pressed(KeyCode::ArrowRight) && global_transform.translation().x + state.width / 2.0 <= window.width() / 2.0 {
+        }; } else if keyboard_input.pressed(KeyCode::ArrowRight)
+        && global_transform.translation().x + state.width / 2.0 <= window.width() / 2.0
+    {
         transform.translation += Vec3 {
             x: 15.0,
             y: 0.0,
@@ -96,162 +145,34 @@ fn move_rectangle(
     }
 }
 
-fn check_if_ball_hits_rectangle(
+fn on_collision_with_brick(
+    mut brick_query: Query<(&CollidingEntities, &mut BrickState)>,
+    time: Res<Time>,
+) {
+
+    for (brick_entities, mut brick_state) in &mut brick_query {
+        brick_state.hit_timer.tick(time.delta());
+        if !(brick_entities.0.is_empty()) {
+            // only react to first collision
+            println!("{:?}", brick_state.hit_timer.elapsed_secs());
+            if brick_state.hit_timer.elapsed_secs() > 0.05 {
+                brick_state.hit_bar -= 1;
+                brick_state.hit_timer.reset();
+            }
+        }
+
+    }
+}
+
+fn remove_brick(
     mut commands: Commands,
-    mut rectangles: Query<(&GlobalTransform, Entity, &mut RectangleState)>,
-    mut ball: Query<(&GlobalTransform, &mut BallState, &mut Transform)>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
+    mut brick_query: Query<(Entity, &mut BrickState)>,
+    time: Res<Time>,
 ) {
-    let (ball_global_transform, mut ball_state, mut ball_transform) = ball.single_mut();
-    for (rectangle_transform, rectangle_entity, mut rectangle_state) in &mut rectangles {
-        let rectangle_width = rectangle_state.width;
-        let rectangle_height = rectangle_state.height;
-        let rectangle_x = rectangle_transform.translation().x;
-        let rectangle_y = rectangle_transform.translation().y;
-        let ball_x = ball_global_transform.translation().x;
-        let ball_y = ball_global_transform.translation().y;
-        let bottom_left_corner = Vec2 {
-            x: rectangle_x - rectangle_width / 2.0,
-            y: rectangle_y - rectangle_height / 2.0,
-        };
-        let bottom_right_corner = Vec2 {
-            x: rectangle_x + rectangle_width / 2.0,
-            y: rectangle_y - rectangle_height / 2.0,
-        };
-        let top_left_corner = Vec2 {
-            x: rectangle_x - rectangle_width / 2.0,
-            y: rectangle_y + rectangle_height / 2.0,
-        };
-        let top_right_corner = Vec2 {
-            x: rectangle_x + rectangle_width / 2.0,
-            y: rectangle_y + rectangle_height / 2.0,
-        };
-        let distance_to_bottom_left_corner = Vec2 {
-            x: ball_x - bottom_left_corner.x,
-            y: ball_y - bottom_left_corner.y,
+    for (entity, brick_state) in &mut brick_query {
+        // ensure that one loop has passed before despawning so physics will be applied
+        if brick_state.hit_bar == 0 && brick_state.hit_timer.elapsed_secs() > time.delta_seconds() as f32 {
+            commands.entity(entity).despawn();
         }
-        .length();
-        let distance_to_bottom_right_corner = Vec2 {
-            x: ball_x - bottom_right_corner.x,
-            y: ball_y - bottom_right_corner.y,
-        }
-        .length();
-        let distance_to_top_left_corner = Vec2 {
-            x: ball_x - top_left_corner.x,
-            y: ball_y - top_left_corner.y,
-        }
-        .length();
-        let distance_to_top_right_corner = Vec2 {
-            x: ball_x - top_right_corner.x,
-            y: ball_y - top_right_corner.y,
-        }
-        .length();
-        if (ball_x - rectangle_x).abs() <= rectangle_width / 2.0
-            && (ball_y - rectangle_y).abs() <= rectangle_height / 2.0 + ball_state.radius
-        {
-            if !rectangle_state.player_controlled {
-                rectangle_state.hit_bar -= 1;
-                commands.entity(rectangle_entity).insert(materials.add(Color::rgb(0.0, 1.0 / rectangle_state.hit_bar as f32, 0.0)));
-                reverse_ball_y_direction(&mut ball_state);
-            } else {
-                change_ball_direction(&mut ball_state, (ball_x - rectangle_x) / rectangle_width);
-            }
-            // prevent ball from getting stuck
-            ball_transform.translation += ball_state.direction * 5.0;
-        } else if (ball_y - rectangle_y).abs() <= rectangle_height / 2.0
-            && (ball_x - rectangle_x).abs() <= rectangle_width / 2.0 + ball_state.radius
-            || distance_to_bottom_left_corner <= ball_state.radius
-            || distance_to_top_right_corner <= ball_state.radius
-            || distance_to_top_left_corner <= ball_state.radius
-            || distance_to_bottom_right_corner <= ball_state.radius
-        {
-            if !rectangle_state.player_controlled {
-                // prevents ball from going through all rectangles in a line if the ball goes straight up
-                if ball_state.direction.x.abs() / ball_state.direction.length() > 0.1 {
-                    reverse_ball_x_direction(&mut ball_state);
-                } else {
-                    reverse_ball_y_direction(&mut ball_state);
-                }
-                rectangle_state.hit_bar -= 1;
-                ball_transform.translation += ball_state.direction * 5.0;
-                commands.entity(rectangle_entity).insert(materials.add(Color::rgb(0.0, 1.0 / rectangle_state.hit_bar as f32, 0.0)));
-            }
-        }
-        if rectangle_state.hit_bar == 0 {
-            commands.entity(rectangle_entity).despawn();
-        }
-    }
-}
-
-fn check_if_ball_hits_window_side(
-    windows: Query<&Window>,
-    mut ball: Query<(&GlobalTransform, &mut BallState, &mut Transform)>,
-    rectangle_global_transform: Query<&GlobalTransform, With<PlayerRectangle>>,
-    mut game_state: ResMut<GameState>,
-) {
-    let (ball_global_transform, mut ball_state, mut ball_transform) = ball.single_mut();
-    let window = windows.single();
-    let rectangle_global_transform = rectangle_global_transform.single().translation();
-    let ball_x = ball_global_transform.translation().x;
-    let ball_y = ball_global_transform.translation().y;
-    let window_width = window.width();
-    let window_height = window.height();
-    if ball_x - ball_state.radius <= -window_width / 2.0 || ball_x + ball_state.radius >= window_width / 2.0 {
-        reverse_ball_x_direction(&mut ball_state);
-        ball_transform.translation += ball_state.direction * 5.0;
-    } else if ball_y + ball_state.radius >= window_height / 2.0 {
-        reverse_ball_y_direction(&mut ball_state);
-        ball_transform.translation += ball_state.direction * 5.0;
-    } else if ball_y - ball_state.radius <= -window_height / 2.0 {
-        game_state.lives -= 1;
-        ball_transform.translation += ball_state.direction * 5.0;
-        handle_ball_hits_floor(
-            &mut ball_state,
-            &mut ball_transform.translation,
-            rectangle_global_transform,
-            window_height,
-        );
-    }
-}
-
-fn handle_ball_hits_floor(
-    ball_state: &mut BallState,
-    ball_position: &mut Vec3,
-    rectangle_position: Vec3,
-    window_height: f32,
-) {
-    *ball_position = Vec3 {
-        x: rectangle_position.x,
-        // add offset to prevent ball from getting stuck
-        y: -window_height / 2.0 + ball_state.radius * 2.0 + window_height / 60.0,
-        z: 0.0,
-    };
-    ball_state.direction = Vec3::new(0.0, 1.0, 0.0);
-    ball_state.active = false;
-}
-
-fn change_ball_direction(ball_state: &mut BallState, x_direction: f32) {
-    ball_state.direction = Vec3 {
-        x: x_direction,
-        y: -ball_state.direction.y,
-        z: ball_state.direction.z,
-    };
-    // normalize vector back to original speed
-    ball_state.direction = ball_state.direction / ball_state.direction.length();
-}
-
-fn reverse_ball_x_direction(ball_state: &mut BallState) {
-    ball_state.direction = Vec3 {
-        x: -ball_state.direction.x,
-        y: ball_state.direction.y,
-        z: ball_state.direction.z,
-    }
-}
-
-fn reverse_ball_y_direction(ball_state: &mut BallState) {
-    ball_state.direction = Vec3 {
-        x: ball_state.direction.x,
-        y: -ball_state.direction.y,
-        z: ball_state.direction.z,
     }
 }

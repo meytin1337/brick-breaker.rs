@@ -1,10 +1,11 @@
 [package]
-name = "game"
+name = "brick-breaker"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 bevy = { version = "0.13.2", features = ["dynamic_linking"] }
+bevy_xpbd_2d = "0.4"
 
 [profile.dev]
 opt-level = 1

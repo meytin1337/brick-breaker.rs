@@ -4,7 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-bevy = { version = "0.13.2", features = ["dynamic_linking"] }
+# bevy = { version = "0.13.2", features = ["dynamic_linking"] }
+bevy = { version = "0.13.2" }
+bevy_embedded_assets = "0.10.2"
 bevy_xpbd_2d = "0.4"
 
 [profile.dev]
